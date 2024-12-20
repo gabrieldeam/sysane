@@ -1,9 +1,9 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.user import UserCreate, UserLogin
+from app.utils.cookie_service import create_cookie_response
 from app.services.auth import create_user, authenticate_user
 from app.utils.hashing import hash_password
 from app.email.send_email import send_verification_email
@@ -13,12 +13,11 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 
-# Carregar variáveis do .env
 load_dotenv()
 
-SECRET_KEY = "sua_chave_secreta_super_segura"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 120
+SECRET_KEY = os.getenv("SECRET_KEY", "default_secret_key") 
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 120))
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -36,8 +35,6 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Email já cadastrado.")
     
     db_user = create_user(db, user)
-
-    # Gerar token de verificação com expiração
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     verification_token = jwt.encode(
         {"sub": str(db_user.id), "exp": expire}, 
@@ -54,38 +51,29 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 @router.get("/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):
     try:
-        # Decodificar o token com validação de expiração
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
 
         if user_id is None:
             raise HTTPException(status_code=400, detail="Token inválido. 'sub' não encontrado no payload.")
 
-        # Convertendo user_id para inteiro antes da consulta no banco
         user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
         if not user:
             raise HTTPException(status_code=404, detail="Usuário não encontrado.")
         if user.is_verified:
             raise HTTPException(status_code=400, detail="Email já verificado.")
 
-        # Atualizar o status do usuário
         user.is_verified = True
         db.commit()
 
-        # Gerar token de login
         login_token = create_access_token({"sub": str(user.id)})
 
-        # Configurar cookie
-        response = JSONResponse({"message": "Email verificado com sucesso"})
-        response.set_cookie(
-            key="access_token",
-            value=f"Bearer {login_token}",
-            httponly=True,
+        return create_cookie_response(
+            message="Email verificado com sucesso",
+            token=login_token,
             max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            secure=True,
-            samesite="Strict",
         )
-        return response
+    
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=400, detail="Token expirado. Solicite um novo email de verificação.")
     except jwt.JWTError as e:
@@ -101,7 +89,6 @@ def forgot_password(email: str, db: Session = Depends(get_db)):
     reset_token = create_access_token({"sub": user.id})
     reset_url = f"{os.getenv('FRONTEND_URL')}/auth/reset-password?token={reset_token}"
 
-    # Enviar email para redefinição de senha
     send_verification_email(user.email, user.name, reset_url)
 
     return {"message": "Email para redefinição de senha enviado com sucesso."}
@@ -110,34 +97,26 @@ def forgot_password(email: str, db: Session = Depends(get_db)):
 @router.post("/reset-password")
 def reset_password(token: str, new_password: str, db: Session = Depends(get_db)):
     try:
-        # Decodificar o token e obter o ID do usuário
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
         if user_id is None:
             raise HTTPException(status_code=400, detail="Token inválido.")
 
-        user = db.query(User).filter(User.id == user_id).first()
+        user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
         if not user:
             raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
-        # Atualizar a senha
         user.hashed_password = hash_password(new_password)
         db.commit()
 
-        # Gerar token de login após redefinição bem-sucedida
         login_token = create_access_token({"sub": str(user.id)})
 
-        # Configurar cookie
-        response = JSONResponse({"message": "Senha redefinida com sucesso"})
-        response.set_cookie(
-            key="access_token",
-            value=f"Bearer {login_token}",
-            httponly=True,
+        return create_cookie_response(
+            message="Senha redefinida com sucesso",
+            token=login_token,
             max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            secure=True,
-            samesite="Strict",
         )
-        return response
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=400, detail="Token expirado. Solicite um novo email de redefinição de senha.")
     except jwt.JWTError:
@@ -152,17 +131,11 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     
     login_token = create_access_token({"sub": str(db_user.id)})
 
-    response = JSONResponse({"message": "Login realizado com sucesso"})
-    response.set_cookie(
-        key="access_token",
-        value=f"Bearer {login_token}",
-        httponly=True,
+    return create_cookie_response(
+        message="Login realizado com sucesso",
+        token=login_token,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        secure=True, 
-        samesite="Strict", 
     )
-    return response
-
 
 @router.get("/email-exists")
 def email_exists(email: str, db: Session = Depends(get_db)):
@@ -200,11 +173,9 @@ def resend_verification_email(email: str, db: Session = Depends(get_db)):
     if user.is_verified:
         return {"message": "Email já foi verificado."}
 
-    # Gerar um novo token de verificação com expiração
     verification_token = create_access_token({"sub": str(user.id)})
     verification_url = f"{os.getenv('FRONTEND_URL')}/auth/verify-email?token={verification_token}"
 
-    # Reenviar email de verificação
     send_verification_email(user.email, user.name, verification_url)
 
     return {"message": "Email de verificação reenviado com sucesso."}
