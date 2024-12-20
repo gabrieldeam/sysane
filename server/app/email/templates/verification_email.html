@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Verification</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6;">
+    <h2>Bem-vindo à plataforma Sysane!</h2>
+    <p>Olá {{ name }},</p>
+    <p>Por favor, clique no link abaixo para verificar seu email e acessar a plataforma:</p>
+    <a href="{{ verification_url }}" style="color: #4CAF50; text-decoration: none; font-weight: bold;">
+        Verificar Meu Email
+    </a>
+    <p>Se você não se registrou, ignore este email.</p>
+    <p>Obrigado,</p>
+    <p><strong>Equipe Sysane</strong></p>
+</body>
+</html>
